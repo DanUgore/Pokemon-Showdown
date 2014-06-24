@@ -2490,6 +2490,7 @@ var Battle = (function () {
 			this.sides[i].faintedThisTurn = false;
 		}
 		this.add('turn', this.turn);
+		this.singleEvent('TurnStart', this.getFormat(), {}, this); // No battle mechanics use this event currently. Only formats.
 		this.makeRequest('move');
 	};
 	Battle.prototype.start = function () {
