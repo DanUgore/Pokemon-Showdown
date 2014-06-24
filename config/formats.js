@@ -472,6 +472,29 @@ exports.Formats = [
 		ruleset: ['Pokemon', 'Team Preview', 'HP Percentage Mod'],
 		banlist: ['Illegal', 'Unreleased']
 	},
+	{
+		name: "RNG Battle",
+		section: "Other Metagames",
+
+		searchShow: false,
+		onStart: function () {
+			this.add('rule', 'Transparent RNG: RNG state is known at the beginning of each turn.');
+		},
+		onBegin: function () {
+			this.debug('cutting down to 3');
+			this.p1.pokemon = this.p1.pokemon.slice(0, 3);
+			this.p1.pokemonLeft = this.p1.pokemon.length;
+			this.p2.pokemon = this.p2.pokemon.slice(0, 3);
+			this.p2.pokemonLeft = this.p2.pokemon.length;
+		},
+		onTurnStart: function () {
+			var seed = this.seed.map(function(w){return w.toString(16);}).join('').toUpperCase();
+			//this.add('-seed', ("0000000000000000"+seed).slice(-16));
+			this.add('message', 'Seed: ' + ("0000000000000000"+seed).slice(-16));
+		},
+		team: 'random',
+		ruleset: ['PotD', 'Pokemon', 'Sleep Clause Mod', 'HP Percentage Mod']
+	},
 
 	// BW2 Singles
 	///////////////////////////////////////////////////////////////////
