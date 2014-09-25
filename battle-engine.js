@@ -332,6 +332,7 @@ BattlePokemon = (function () {
 	BattlePokemon.prototype.hpType = 'Dark';
 	BattlePokemon.prototype.hpPower = 60;
 	BattlePokemon.prototype.speed = 0;
+	BattlePokemon.prototype.tieOrder = 0;
 
 	BattlePokemon.prototype.toString = function () {
 		var fullname = this.fullname;
@@ -737,6 +738,8 @@ BattlePokemon = (function () {
 		}
 		this.volatiles = {};
 		this.switchFlag = false;
+		
+		this.tieOrder = 0;
 
 		this.lastMove = '';
 		this.moveThisTurn = '';
@@ -2377,7 +2380,7 @@ Battle = (function () {
 		this.currentRequestDetails = '';
 		return true;
 	};
-	Battle.prototype.switchIn = function (pokemon, pos) {
+	Battle.prototype.switchIn = function (pokemon, pos, noSort) {
 		if (!pokemon || pokemon.isActive) return false;
 		if (!pos) pos = 0;
 		var side = pokemon.side;
@@ -2414,7 +2417,7 @@ Battle = (function () {
 		this.add('switch', pokemon, pokemon.getDetails);
 		pokemon.update();
 		this.runEvent('SwitchIn', pokemon);
-		this.addQueue({pokemon: pokemon, choice: 'runSwitch'});
+		this.addQueue({pokemon: pokemon, choice: 'runSwitch'}, noSort);
 	};
 	Battle.prototype.canSwitch = function (side) {
 		var canSwitchIn = [];
@@ -2502,6 +2505,7 @@ Battle = (function () {
 			for (var j = 0; j < this.sides[i].active.length; j++) {
 				var pokemon = this.sides[i].active[j];
 				if (!pokemon) continue;
+				pokemon.tieOrder = 0;
 				pokemon.moveThisTurn = '';
 				pokemon.usedItemThisTurn = false;
 				pokemon.newlySwitched = false;
@@ -3132,6 +3136,7 @@ Battle = (function () {
 					'switch': 6,
 					'runSwitch': 6.1,
 					'megaEvo': 5.9,
+					'resort': 5.5, // Rerolls speed ties, GF stuff.
 					'residual': -100,
 					'team': 102,
 					'start': 101
@@ -3172,6 +3177,7 @@ Battle = (function () {
 			if (!decision.pokemon && !decision.speed) decision.speed = 1;
 			if (!decision.speed && decision.choice === 'switch' && decision.target) decision.speed = decision.target.speed;
 			if (!decision.speed) decision.speed = decision.pokemon.speed;
+			if (decision.choice === 'move' || decision.choice === 'switch') decision.speed = decision.speed & 8191; // Silly GameFreak shenanigans.
 
 			if (decision.choice === 'switch' && !decision.side.pokemon[0].isActive) {
 				// if there's no actives, switches happen before activations
@@ -3181,7 +3187,99 @@ Battle = (function () {
 			this.queue.push(decision);
 		}
 		if (!noSort) {
-			this.queue.sort(Battle.comparePriority);
+			this.sortQueue();
+		}
+	};
+	Battle.prototype.sortQueue = function (rollSpeedTies) {
+		// Debug function. Converts a decision or an array of decisions into a string.
+		// function decisionString(d) {return (Array.isArray(d) ? '['+d.map(decisionString).join(', ')+']' : d.choice+(d.pokemon?' '+d.pokemon.toString().substr(0,3):''));}
+		var queue = this.queue;
+		var sortedQueue = [];
+		sortedQueue.push(queue.shift()); // Add the first element to the sorted queue.
+		while (queue.length) { // While there are more elements... 
+			var decision = queue.shift(); // Remove the next element.
+			if (!decision.priority) decision.priority = 0;
+			if (!decision.subPriority) decision.subPriority = 0;
+			decision.speed = decision.speed || (decision.pokemon ? decision.pokemon.speed : 0);
+			for (var i = sortedQueue.length-1; i > -1; i--) {
+				var sortedDecision = (Array.isArray(sortedQueue[i]) ? sortedQueue[i][0] : sortedQueue[i]);
+				if (decision.priority > sortedDecision.priority) {
+					if (i > 0) continue;
+					sortedQueue.unshift(decision);
+					break;
+				}
+				if (decision.priority < sortedDecision.priority) {
+					sortedQueue.splice(i+1, 0, decision);
+					break;
+				}
+				if (decision.subPriority > sortedDecision.subPriority) {
+					if (i > 0) continue;
+					sortedQueue.unshift(decision);
+					break;
+				}
+				if (decision.subPriority < sortedDecision.subPriority) {
+					sortedQueue.splice(i+1, 0, decision);
+					break;
+				}
+				if (decision.speed > sortedDecision.speed) {
+					if (i > 0) continue;
+					sortedQueue.unshift(decision);
+					break;
+				}
+				if (decision.speed < sortedDecision.speed) {
+					sortedQueue.splice(i+1, 0, decision);
+					break;
+				}
+				// Speed Tie
+				if (Array.isArray(sortedQueue[i])) sortedQueue[i].push(decision);
+				else sortedQueue[i] = [sortedQueue[i], decision];
+				break;
+			}
+		}
+		// Resolve speed ties
+		for (var i = 0; i < sortedQueue.length; i++) {
+			if (!Array.isArray(sortedQueue[i])) {
+				queue.push(sortedQueue[i]);
+				continue;
+			}
+			var decisions = sortedQueue[i];
+			if (!decisions[0].pokemon || !rollSpeedTies) {
+				queue.push.apply(queue, decisions);
+				continue;
+			}
+			/*
+			if (decisions[0].pokemon.tieOrder) {
+				decisions.sort(function(a,b){
+					if (a.pokemon && b.pokemon) {
+						return b.pokemon.tieOrder - a.pokemon.tieOrder;
+					}
+					if (a.pokemon) return -1;
+					if (b.pokemon) return 1;
+					return 0;
+				});
+				queue.push.apply(queue, decisions);
+				continue;
+			}
+			*/
+			// Sort pokemon based on position before randomizing.
+			// P1's Left to Right then P2's Left to Right
+			decisions.sort(function (a,b) { 
+				if (a.pokemon && b.pokemon) {
+					if (a.pokemon.side.n - b.pokemon.side.n) return a.pokemon.side.n - b.pokemon.side.n;
+					return (a.pokemon.position - b.pokemon.position);
+				}
+				if (a.pokemon) return -1;
+				if (b.pokemon) return 1;
+				return 0;
+			});
+			// Rolling to see who wins the speed ties
+			while (decisions.length > 1) {
+				var rand = this.random(decisions.length);
+				// decisions[rand].pokemon.tieOrder = decisions.length;
+				queue.push(decisions.splice(rand, 1)[0]);
+			}
+			// decisions[0].pokemon.tieOrder = 1;
+			queue.push(decisions[0]);
 		}
 	};
 	Battle.prototype.prioritizeQueue = function (decision, source, sourceEffect) {
@@ -3254,11 +3352,12 @@ Battle = (function () {
 
 			this.add('start');
 			for (var pos = 0; pos < this.p1.active.length; pos++) {
-				this.switchIn(this.p1.pokemon[pos], pos);
+				this.switchIn(this.p1.pokemon[pos], pos, true);
 			}
 			for (var pos = 0; pos < this.p2.active.length; pos++) {
-				this.switchIn(this.p2.pokemon[pos], pos);
+				this.switchIn(this.p2.pokemon[pos], pos, true);
 			}
+			this.sortQueue(true);
 			for (var pos = 0; pos < this.p1.pokemon.length; pos++) {
 				pokemon = this.p1.pokemon[pos];
 				this.singleEvent('Start', this.getEffect(pokemon.species), pokemon.speciesData, pokemon);
@@ -3387,6 +3486,9 @@ Battle = (function () {
 			this.clearActiveMove(true);
 			this.residualEvent('Residual');
 			break;
+		case: 'resort':
+			this.sortQueue(true);
+			break;
 		}
 
 		// phazing (Roar, etc)
@@ -3457,9 +3559,10 @@ Battle = (function () {
 		if (!this.midTurn) {
 			this.queue.push({choice:'residual', priority: -100});
 			this.queue.push({choice:'beforeTurn', priority: 100});
+			this.queue.push({choice:'resort', priority: 5.5});
 			this.midTurn = true;
 		}
-		this.addQueue(null);
+		this.sortQueue(true); // Sort the queue
 
 		while (this.queue.length) {
 			var decision = this.queue.shift();
